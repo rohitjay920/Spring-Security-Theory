@@ -1,0 +1,263 @@
+Dependencies:
+
+spring-boot-starter-web
+spring-boot-starter-security
+
+If the security is not configured after adding the security dependency by default an
+an encrypted password will be generated which keeps changing each time the application is
+restarted with the default username as 'user'and spring security will use 'http basic' as
+its authentication mode.
+
+We can configure security by creating a bean of SecurityFilterChain in the following way:
+
+@Bean
+public SecurityFilterChain filterChain(HttpSecurity http) throws Exception{
+	http.authorizeHttpRequests(auth -> auth.requestMatcher("/api/message")
+	.permitAll().anyRequest().authenticated()).formLogin();
+	return http.build();
+}
+
+Here we are specifying that the endpoint "/api/message" must be processed without authentication and any other request must be authenticated through a form login.
+
+We can set a custom username and password for authentication to avoid spring to generate
+its own credentials by using the following properties in 'application.properties' file:
+
+spring.security.user.name = username (eg. Rohit)
+spring.security.user.password = password (eg. 1234)
+
+By doing this the default encrypted password will not be generated and the given password won't be encrypted as well. 
+But the drawback is the we can configure only one user credential.
+
+We can overcome this drawback by creating a bean of 'UserDetailsManager' in which mutiple user credentials can be created by creating 'UserDetails' object and setting the UserDetails objects to the constructor of 'InMemoryUserDetailsManager' which is an implementing class of UserDetailsManager interface. The config is mentioned below:
+
+@Bean
+public UserDetailsManager userDetails() {
+	UserDetails user1 = User.withUsername("Rohit").password("{noop}123")
+	.roles("ADMIN").build();
+	UserDetails user2 = User.withUsername("Sam").password("{noop}12345")
+	.roles("USER").build();
+	return new InMemoryUserDetailsManager(user1,user2);
+}
+
+The 'User' class belongs to org.springframework.security.core.userdetails.User;
+
+In the above config two users are created namely Rohit and Sam and their password is prefixed with {noop}.
+
+{noop} is a special prefix used in Spring Security to indicate that a password is stored in plain text and should not be encoded. The term "noop" stands for "no operation," meaning that no additional processing, like hashing or encryption, is applied to the password.
+
+Usage of {noop} in Spring Security:
+When you define a user in Spring Security with a password, the framework often expects the password to be stored securely, typically using an encoding scheme like BCrypt. However, during development or for simple use cases, you might want to store the password in plain text. To tell Spring Security not to apply any encoding or decoding to the password, you use the {noop} prefix.
+
+Now in the above two methods the user credentials are hardcoded and is stored in the InMemory of the framework when it is running, if we want to store the user in database and authenticate them without hardcoding then the following approach must be followed:
+
+This approach is not just used for authentication, it is also used for authorization as well and the endpoints will only be accessed based on the role he/she is assigned with. If the role is not mentioned then even if the authenticated user is trying to access the endpoint a 403 error will be thrown since his/her role is not mentioned.
+
+dependencies:
+MySql
+Spring data jpa
+
+Step-1: Create User entity and implement UserDetails interface
+
+//Config DB in application.properties file
+
+@Entity
+@Setter
+@Getter
+@NoArgsConstructor
+public class User implements UserDetails{
+	@Id
+	@GeneratedValue(strategy = GenerationType.IDENTITY)
+	private int id;
+	private String email;
+	private String username;
+	private String password;
+	@Enumerated(EnumType.STRING)
+	private Roles role;
+	@Override
+	public Collection<? extends GrantedAuthority> getAuthorities() {
+		
+		return List.of(new SimpleGrantedAuthority("ROLE_"+role.name()));
+	}
+	@Override
+	public boolean isAccountNonExpired() {
+		// TODO Auto-generated method stub
+		return true;
+	}
+	@Override
+	public boolean isAccountNonLocked() {
+		// TODO Auto-generated method stub
+		return true;
+	}
+	@Override
+	public boolean isCredentialsNonExpired() {
+		// TODO Auto-generated method stub
+		return true;
+	}
+	@Override
+	public boolean isEnabled() {
+		// TODO Auto-generated method stub
+		return true;
+	}
+}
+
+The getAuthorities() of UserDetails interface is used to return the collection authorities the user has. (authorities are nothing but role)
+While setting the name of role it must always start from ROLE_(roleName)
+eg: ROLE_ADMIN
+
+The UserDetails interface is a core component of Spring Security, representing a user in the system. When you implement this interface in your User entity, you enable Spring Security to use your User object for authentication and authorization processes.
+
+Step-2: Create UserController and UserService classes and UserRepository
+
+//DTO
+@Setter
+@Getter
+public class SignUpRequest {
+	private String username;
+	private String email;
+	private String password;
+	private Roles role; 
+}
+
+@RestController
+public class UserController {
+	@Autowired
+	private UserRepository userRepository;
+	
+	@Autowired
+	private AuthenticationService authenticationService;
+	
+	@PostMapping("/signUp")
+	public ResponseEntity<String> signUp(@RequestBody SignUpRequest signUpRequest){
+		String message = authenticationService.signUp(signUpRequest);
+		return new ResponseEntity<String>(message,HttpStatus.CREATED);
+	}
+	
+	@GetMapping("/login")
+	public ResponseEntity<String> signIn() {
+		return new ResponseEntity<String>("Login successful user",HttpStatus.OK);
+	}
+}
+
+@Service
+public class AuthenticationService {
+	
+	@Autowired
+	private UserRepository userRepository;
+	
+	public String signUp(SignUpRequest signUpRequest) {
+		User user = new User();
+		user.setEmail(signUpRequest.getEmail());
+		user.setRole(signUpRequest.getRole());
+		user.setPassword(signUpRequest.getPassword());
+		user.setUsername(signUpRequest.getUsername());
+		
+		userRepository.save(user);
+		return "User has been successfully created";
+	}
+}
+
+@Repository
+public interface UserRepository extends JpaRepository<User, Integer>{
+		Optional<User> findByUsername(String username);
+}
+
+
+Step-3: Configure SecurityFilterChain to give direct access to sign up API endpoint and authenticate login endpoint
+
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+	@Bean
+	public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception{
+		http.csrf(csrf -> csrf.disable())
+		.sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+		.authorizeHttpRequests(request -> request.requestMatchers("/signUp").permitAll().requestMatchers("/login")
+				.authenticated()).httpBasic();
+		return http.build();
+	}
+}
+
+
+Cross-Site Request Forgery (CSRF) is a security feature in web applications that prevents unauthorized commands from being transmitted from a user that the web application trusts. In Spring Security, CSRF protection is enabled by default, but there are scenarios where you might choose to disable it:
+
+Reasons to Disable CSRF Protection:
+
+API-Driven Applications (Stateless):
+
+In stateless applications, particularly those that rely solely on RESTful APIs, the server does not maintain a session or state between requests. CSRF attacks primarily target stateful applications where the server maintains session information. Since REST APIs typically use tokens (like JWT) for authentication, which are sent explicitly with each request, CSRF protection becomes redundant.
+Example: If your backend is only providing APIs for a client (like a mobile app or a frontend single-page application) and using JWT for authentication, CSRF protection isn't necessary.
+
+No Session Management:
+
+CSRF attacks exploit the fact that web browsers automatically include session cookies with requests. If your application doesn't use cookies for authentication (e.g., it uses a token-based system where tokens are passed explicitly), the threat of CSRF is minimal.
+Example: A single-page application (SPA) where the client stores tokens in local storage or a mobile app that sends authentication tokens with each request.
+
+Since REST is stateless we mention SessionCreationPolicy as STATELESS
+
+
+By Following the above three steps the user can easily sign up.
+
+Now coming to sign in operation:
+
+As already mentioned the spring security encryptes the password by default and check the authentication with an encrypted password it is not possible to authenticate our user whose password is not encrypted using the default AuthenictionProvider given by the spring security. Hence, we need to create our own authentication provider where we collect username and password from the Authentication object (given through form login/http basic login) and check the credentials with the ones present in the database. To do this we need to create two class, one for creating custom authentication provider and the other class to load user from database based on the 
+username/email etc.
+
+@Service
+public class MyUserDetailService implements UserDetailsService{
+	@Autowired
+	private UserRepository userRepository;
+	@Override
+	public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+		Optional<User> user = userRepository.findByUsername(username);
+		if(user.isPresent()) {
+			var userObj = user.get();
+			return org.springframework.security.core.userdetails.User.builder()
+					.username(username).password(user.get().getPassword()).roles(getRoles(user)).build();
+		}
+		else {
+			throw new UsernameNotFoundException("User: "+username+" not found");
+		}
+	}
+	
+	public String[] getRoles(Optional<User> optional) {
+		User user = optional.get();
+		String[] arr = {user.getRole().name()};
+		return arr;
+	}
+}
+
+
+
+@Component
+public class CustomAuthenticationProvider implements AuthenticationProvider{
+	@Autowired
+	private MyUserDetailService userService;
+	
+	@Override
+	public Authentication authenticate(Authentication authentication) throws AuthenticationException {
+		String username = authentication.getName();
+		String password = authentication.getCredentials().toString();
+		UserDetails userDetails = userService.loadUserByUsername(username);
+		System.err.println(password+"         "+userDetails.getPassword());
+		System.err.println(password.equals(userDetails.getPassword()));
+		if(!userDetails.getPassword().equals(password)) {
+			throw new BadCredentialsException("Invalid username or password");
+		}
+		return new UsernamePasswordAuthenticationToken(username, password,userDetails.getAuthorities());
+	}
+
+	@Override
+	public boolean supports(Class<?> authentication) {
+		
+		return UsernamePasswordAuthenticationToken.class.isAssignableFrom(authentication);
+	}
+}
+
+
+By following the above mentioned documentation we can create user and authenticate them by checking with the database and provide access to endpoints based on the assigned role he/she is authorised with.
+
+
+
+
+
+ 
